@@ -7600,12 +7600,12 @@ Expression defaultInit(Type mt, Loc loc, const bool isCfile = false)
         switch (mt.ty)
         {
         case Tchar:
-            value = isCfile ? 0 : 0xFF;
+            value = 0;
             break;
 
         case Twchar:
         case Tdchar:
-            value = isCfile ? 0 : 0xFFFF;
+            value = 0;
             break;
 
         case Timaginary32:
@@ -7614,15 +7614,14 @@ Expression defaultInit(Type mt, Loc loc, const bool isCfile = false)
         case Tfloat32:
         case Tfloat64:
         case Tfloat80:
-            return new RealExp(loc, isCfile ? CTFloat.zero : target.RealProperties.nan, mt);
+            return new RealExp(loc, CTFloat.zero, mt);
 
         case Tcomplex32:
         case Tcomplex64:
         case Tcomplex80:
             {
                 // Can't use fvalue + I*fvalue (the im part becomes a quiet NaN).
-                const cvalue = isCfile ? complex_t(CTFloat.zero, CTFloat.zero)
-                                       : complex_t(target.RealProperties.nan, target.RealProperties.nan);
+                const cvalue = complex_t(CTFloat.zero, CTFloat.zero);
                 return new ComplexExp(loc, cvalue, mt);
             }
 

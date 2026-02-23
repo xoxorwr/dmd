@@ -111,6 +111,8 @@ install: $(BUILD_EXE)
 	mkdir -p '$(INSTALL_DIR)'/man
 	cp -r $(GENERATED)/docs/man/* '$(INSTALL_DIR)'/man/
 	$(QUIET)$(MAKE) -C druntime install INSTALL_DIR='$(INSTALL_DIR)'
+install-fast: $(BUILD_EXE)
+	$(BUILD_EXE) install INSTALL_DIR='$(if $(findstring $(OS),windows),$(shell cygpath -w '$(INSTALL_DIR)'),$(INSTALL_DIR))'
 endif
 
 # Checks that all files have been committed and no temporary, untracked files exist.
