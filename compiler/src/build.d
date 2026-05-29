@@ -1216,7 +1216,7 @@ void processEnvironment()
                 stderr.writeln(`DMD does not support LTO! Ignoring ENABLE_LTO flag...`);
                 break;
             case "ldc":
-                dflags ~= ["-flto=full", "-defaultlib=druntime-ldc-lto"];
+                dflags ~= "-flto=full";
                 break;
             case "gdc":
                 dflags ~= "-flto";
