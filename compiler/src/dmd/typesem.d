@@ -7520,24 +7520,7 @@ bool isZeroInit(Type t, Loc loc)
 
     bool visitBasic(TypeBasic t)
     {
-        switch (t.ty)
-        {
-            case Tchar:
-            case Twchar:
-            case Tdchar:
-            case Timaginary32:
-            case Timaginary64:
-            case Timaginary80:
-            case Tfloat32:
-            case Tfloat64:
-            case Tfloat80:
-            case Tcomplex32:
-            case Tcomplex64:
-            case Tcomplex80:
-                return false; // no
-            default:
-                return true; // yes
-        }
+		return true; // yes
     }
 
     bool visitVector(TypeVector t)
@@ -7601,31 +7584,19 @@ Expression defaultInit(Type mt, Loc loc, const bool isCfile = false)
 
         switch (mt.ty)
         {
-        case Tchar:
-            value = isCfile ? 0 : 0xFF;
-            break;
-
-        case Twchar:
-        case Tdchar:
-            value = isCfile ? 0 : 0xFFFF;
-            break;
-
         case Timaginary32:
         case Timaginary64:
         case Timaginary80:
         case Tfloat32:
         case Tfloat64:
         case Tfloat80:
-            return new RealExp(loc, isCfile ? CTFloat.zero : target.RealProperties.nan, mt);
+            return new RealExp(loc, CTFloat.zero, mt);
 
         case Tcomplex32:
         case Tcomplex64:
         case Tcomplex80:
             {
-                // Can't use fvalue + I*fvalue (the im part becomes a quiet NaN).
-                const cvalue = isCfile ? complex_t(CTFloat.zero, CTFloat.zero)
-                                       : complex_t(target.RealProperties.nan, target.RealProperties.nan);
-                return new ComplexExp(loc, cvalue, mt);
+                return new ComplexExp(loc, complex_t(CTFloat.zero, CTFloat.zero), mt);
             }
 
         case Tvoid:

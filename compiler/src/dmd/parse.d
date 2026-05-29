@@ -4507,6 +4507,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         bool setAlignment = false;
         AST.Expression ealign;
         AST.Expressions* udas = null;
+        AST.Dsymbol anonStructDecl = null;
 
         //printf("parseDeclarations() %s\n", token.toChars());
         if (!comment)
@@ -4532,7 +4533,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         }
 
         const typeLoc = token.loc;
-        AST.Type ts;
+        AST.Type ts = null;
 
         if (!autodecl)
         {
@@ -4560,36 +4561,57 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                      token.value == TOK.interface_)
             {
                 AST.Dsymbol s = parseAggregate();
-                auto a = new AST.Dsymbols();
-                a.push(s);
+                auto ad = s.isAnonDeclaration();
+                if (ad && (token.value == TOK.mul || token.value == TOK.leftParenthesis ||
+                           token.value == TOK.leftBracket ||
+                           (token.value == TOK.identifier &&
+                            (peekNext() == TOK.semicolon || peekNext() == TOK.comma ||
+                             peekNext() == TOK.assign))))
+                {
+                    auto id = Identifier.generateIdWithLoc("__AnonStruct", s.loc);
+                    bool inObject = md && !md.packages && md.id == Id.object;
+                    if (ad.isunion)
+                        s = new AST.UnionDeclaration(s.loc, id);
+                    else
+                        s = new AST.StructDeclaration(s.loc, id, inObject);
+                    (cast(AST.AggregateDeclaration)s).members = ad.decl;
 
-                if (storage_class)
-                {
-                    s = new AST.StorageClassDeclaration(storage_class, a);
-                    a = new AST.Dsymbols();
-                    a.push(s);
+                    anonStructDecl = s;
+                    ts = new AST.TypeIdentifier(s.loc, id);
                 }
-                if (setAlignment)
+                else
                 {
-                    s = new AST.AlignDeclaration(s.loc, ealign, a);
-                    a = new AST.Dsymbols();
+                    auto a = new AST.Dsymbols();
                     a.push(s);
-                }
-                if (link != linkage)
-                {
-                    s = new AST.LinkDeclaration(linkloc, link, a);
-                    a = new AST.Dsymbols();
-                    a.push(s);
-                }
-                if (udas)
-                {
-                    s = new AST.UserAttributeDeclaration(udas, a);
-                    a = new AST.Dsymbols();
-                    a.push(s);
-                }
 
-                addComment(s, comment);
-                return a;
+                    if (storage_class)
+                    {
+                        s = new AST.StorageClassDeclaration(storage_class, a);
+                        a = new AST.Dsymbols();
+                        a.push(s);
+                    }
+                    if (setAlignment)
+                    {
+                        s = new AST.AlignDeclaration(s.loc, ealign, a);
+                        a = new AST.Dsymbols();
+                        a.push(s);
+                    }
+                    if (link != linkage)
+                    {
+                        s = new AST.LinkDeclaration(linkloc, link, a);
+                        a = new AST.Dsymbols();
+                        a.push(s);
+                    }
+                    if (udas)
+                    {
+                        s = new AST.UserAttributeDeclaration(udas, a);
+                        a = new AST.Dsymbols();
+                        a.push(s);
+                    }
+
+                    addComment(s, comment);
+                    return a;
+                }
             }
 
             /* Look for auto initializers:
@@ -4635,7 +4657,8 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     }
                     else
                     {
-                        ts = parseBasicType();
+                        if (!ts)
+                            ts = parseBasicType();
                         ts = parseTypeSuffixes(ts);
                     }
                 }
@@ -4650,6 +4673,38 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
 
         AST.Type tfirst = null;
         auto a = new AST.Dsymbols();
+
+        if (anonStructDecl)
+        {
+            auto ax = new AST.Dsymbols();
+            ax.push(anonStructDecl);
+            AST.Dsymbol s = anonStructDecl;
+            if (storage_class)
+            {
+                s = new AST.StorageClassDeclaration(storage_class, ax);
+                ax = new AST.Dsymbols();
+                ax.push(s);
+            }
+            if (setAlignment)
+            {
+                s = new AST.AlignDeclaration(s.loc, ealign, ax);
+                ax = new AST.Dsymbols();
+                ax.push(s);
+            }
+            if (link != linkage)
+            {
+                s = new AST.LinkDeclaration(linkloc, link, ax);
+                ax = new AST.Dsymbols();
+                ax.push(s);
+            }
+            if (udas)
+            {
+                s = new AST.UserAttributeDeclaration(udas, ax);
+                ax = new AST.Dsymbols();
+                ax.push(s);
+            }
+            a.push(s);
+        }
 
         while (1)
         {
