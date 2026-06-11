@@ -457,6 +457,9 @@ Symbol* toSymbol(Dsymbol s)
             if (fd.isSafe())
                 f.Fflags3 |= F3safe;
 
+            if (fd.isWatched)
+                f.Fflags3 |= F3watched;
+
             if (fd.inlining == PINLINE.default_ && global.params.useInline ||
                 fd.inlining == PINLINE.always)
             {

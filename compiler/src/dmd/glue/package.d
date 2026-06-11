@@ -982,6 +982,18 @@ void FuncDeclaration_toObjFile(FuncDeclaration fd, bool multiobj)
 
     writefunc(s); // hand off to backend
 
+    if (fd.isWatched)
+    {
+        import dmd.common.outbuffer;
+        import dmd.mangle : mangleToBuffer;
+        OutBuffer m_buf;
+        mangleToBuffer(fd, m_buf);
+        printf("[dpatch-watched] %s\n", m_buf.peekChars());
+
+        import dmd.daemon : g_has_watched;
+        g_has_watched = true;
+    }
+
     buildCapture(fd);
 
     // Restore symbol table

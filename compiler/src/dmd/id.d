@@ -494,6 +494,7 @@ immutable Msgtable[] msgtable =
     { "udaMustUse", "mustuse" },
     { "udaStandalone", "standalone" },
     { "udaSection", "section" },
+    { "watch" },
 
     // Editions
     { "__edition_latest_do_not_use", },

@@ -195,6 +195,105 @@ private int tryMain(const(char)[][] argv, out Param params)
     if (parseCommandlineAndConfig(argv, params, files, eSink))
         return EXIT_FAILURE;
 
+    if (params.watch)
+    {
+        import dmd.root.filename : FileName;
+        import dmd.root.file : File;
+
+        bool endsWith(const(char)[] str, const(char)[] suffix)
+        {
+            return str.length >= suffix.length && str[$ - suffix.length .. $] == suffix;
+        }
+
+        string argsFilePath = null;
+        for (size_t i = 0; i < files.length; i++)
+        {
+            string f = files[i].toDString().idup;
+            string testPath = f ~ ".dpatch.args";
+            if (FileName.exists(testPath) == 1)
+            {
+                argsFilePath = testPath;
+                break;
+            }
+            else if (endsWith(f, ".dpatch.args") && FileName.exists(f) == 1)
+            {
+                argsFilePath = f;
+                break;
+            }
+        }
+
+        if (argsFilePath)
+        {
+            printf("[daemon] Loading project configuration from %.*s...\n", cast(int)argsFilePath.length, argsFilePath.ptr);
+            OutBuffer buf;
+            if (File.read(argsFilePath, buf) == false)
+            {
+                string content = cast(string)buf[];
+                if (content.length > 0)
+                {
+                    string[] lines;
+                    size_t lineStart = 0;
+                    for (size_t idx = 0; idx <= content.length; idx++)
+                    {
+                        if (idx == content.length || content[idx] == '\n' || content[idx] == '\r')
+                        {
+                            string line = content[lineStart .. idx];
+                            // Strip leading/trailing whitespace
+                            while (line.length > 0 && (line[0] == ' ' || line[0] == '\t'))
+                                line = line[1 .. $];
+                            while (line.length > 0 && (line[$ - 1] == ' ' || line[$ - 1] == '\t' || line[$ - 1] == '\r' || line[$ - 1] == '\n'))
+                                line = line[0 .. $ - 1];
+                            if (line.length > 0)
+                                lines ~= line;
+                            lineStart = idx + 1;
+                        }
+                    }
+
+                    string[] argStrings;
+                    const(char)[][] newArgv;
+
+                    string argv0Str = argv[0].idup;
+                    argStrings ~= argv0Str;
+                    newArgv ~= argv0Str;
+
+                    foreach (idx, line; lines)
+                    {
+                        if (idx == 0 && (line == argv[0] || endsWith(line, "/dmd")))
+                            continue;
+                        argStrings ~= line;
+                        newArgv ~= line;
+                    }
+
+                    string targetBinPath = null;
+                    if (endsWith(argsFilePath, ".dpatch.args"))
+                        targetBinPath = argsFilePath[0 .. $ - ".dpatch.args".length];
+
+                    // Add remaining command-line args (excluding the dpatch.args file path, target binary, and --watch)
+                    for (size_t idx = 1; idx < argv.length; idx++)
+                    {
+                        string s = argv[idx].idup;
+                        if (s == "-watch" || s == "--watch" || s == argsFilePath ||
+                            (endsWith(argsFilePath, s) && s.length > 0) ||
+                            (targetBinPath && (s == targetBinPath || endsWith(targetBinPath, s))))
+                            continue;
+                        argStrings ~= s;
+                        newArgv ~= s;
+                    }
+
+                    Strings newFiles;
+                    Param newParams;
+                    global._init();
+                    if (parseCommandlineAndConfig(newArgv, newParams, newFiles, eSink) == 0)
+                    {
+                        import dmd.daemon : dmd_watch_loop;
+                        dmd_watch_loop(newArgv, newParams, newFiles);
+                        return 0;
+                    }
+                }
+            }
+        }
+    }
+
     global.compileEnv.previewIn        = params.previewIn;
     global.compileEnv.transitionIn     = params.v.vin;
     global.compileEnv.ddocOutput       = params.ddoc.doOutput;
@@ -896,6 +995,39 @@ private int tryMain(const(char)[][] argv, out Param params)
 
     if (global.errors || global.warnings)
         removeHdrFilesAndFail(params, modules);
+
+    // Save compilation arguments to <ofname>.dpatch.args if watched functions were compiled
+    import dmd.daemon : g_has_watched;
+    if (g_has_watched && status == EXIT_SUCCESS)
+    {
+        import dmd.root.file : File;
+
+        string ofname = params.exefile.length ? params.exefile.idup : (params.objname.length ? params.objname.idup : "a.out");
+        string argsFilePath = ofname ~ ".dpatch.args";
+
+        OutBuffer argBuf;
+        foreach (i, arg; argv)
+        {
+            if (i == 0) continue;
+            string s = arg.idup;
+            if (s != "-watch" && s != "--watch")
+            {
+                if (argBuf.length > 0)
+                    argBuf.writeByte('\n');
+                argBuf.write(s);
+            }
+        }
+        if (File.write(argsFilePath, argBuf[]))
+        {
+            printf("[dpatch] Wrote compilation arguments to %.*s\n", cast(int)argsFilePath.length, argsFilePath.ptr);
+        }
+    }
+
+    if (params.watch && status == EXIT_SUCCESS)
+    {
+        import dmd.daemon : dmd_watch_loop;
+        dmd_watch_loop(argv, params, files);
+    }
 
     return status;
 }

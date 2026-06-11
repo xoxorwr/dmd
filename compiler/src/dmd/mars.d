@@ -681,6 +681,8 @@ bool parseCommandLine(const ref Strings arguments, const size_t argc, out Param 
 
         if (arg == "-allinst")               // https://dlang.org/dmd.html#switch-allinst
             params.allInst = true;
+        else if (arg == "-watch" || arg == "--watch")
+            params.watch = true;
         else if (startsWith(p + 1, "cpp="))  // https://dlang.org/dmd.html#switch-cpp
         {
             if (p[5])

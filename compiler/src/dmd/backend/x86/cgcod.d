@@ -628,6 +628,12 @@ void prolog(ref CGstate cg, ref CodeBuilder cdb)
     if (config.flags3 & CFG3ibt && !I16)
         cdb.gen1(I32 ? ENDBR32 : ENDBR64);
 
+    if (funcsym_p.Sfunc.Fflags3 & F3watched)
+    {
+        // 14 bytes for absolute 64-bit jump hotswap trampoline
+        cdb.genasm([0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90]);
+    }
+
     // Special Intel 64 bit ABI prolog setup for variadic functions
     Symbol* sv64 = null;                        // set to __va_argsave
     if (I64 && variadic(funcsym_p.Stype))

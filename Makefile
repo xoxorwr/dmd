@@ -59,9 +59,9 @@ endif
 .PHONY: all clean test html install \
         dmd dmd-unittest dmd-test druntime druntime-test \
         auto-tester-build auto-tester-test buildkite-test \
-        toolchain-info check-clean-git style
+        toolchain-info check-clean-git style libdpatch
 
-all: dmd druntime
+all: dmd druntime libdpatch
 
 $(BUILD_EXE): compiler/src/build.d
 	$(HOST_DMD) -of$@ -g $<
@@ -85,6 +85,7 @@ clean:
 	cd compiler/test && rm -rf test_results *.lst trace.log trace.def
 	$(RM) tags
 	$(QUIET)$(MAKE) -C druntime clean
+	rm -f libdpatch.a libdpatch.so libdpatch.o
 
 dmd: $(BUILD_EXE)
 	$(BUILD_CMD) $@
@@ -97,6 +98,10 @@ dmd-test: dmd-unittest dmd druntime $(RUN_EXE)
 
 druntime: dmd
 	$(QUIET)$(MAKE) -C druntime
+
+libdpatch:
+	$(HOST_DMD) -lib -of=libdpatch.a druntime/src/core/dpatch/codepage.d druntime/src/core/dpatch/dpatch.d druntime/src/core/dpatch/resolver.d druntime/src/core/dpatch/trampoline.d druntime/src/core/dpatch/package.d -fPIC -g
+	$(HOST_DMD) -shared -of=libdpatch.so druntime/src/core/dpatch/codepage.d druntime/src/core/dpatch/dpatch.d druntime/src/core/dpatch/resolver.d druntime/src/core/dpatch/trampoline.d druntime/src/core/dpatch/package.d -fPIC -g
 
 druntime-test: dmd
 	$(QUIET)$(MAKE) -C druntime unittest
@@ -115,12 +120,18 @@ ifneq (,$(findstring Darwin_64_32, $(PWD)))
 install:
 	echo "Darwin_64_32_disabled"
 else
-install: $(BUILD_EXE)
+install: $(BUILD_EXE) libdpatch
 	$(BUILD_CMD) man
 	$(BUILD_CMD) install INSTALL_DIR='$(if $(findstring $(OS),windows),$(shell cygpath -w '$(INSTALL_DIR)'),$(INSTALL_DIR))'
 	mkdir -p '$(INSTALL_DIR)'/man
 	cp -r $(GENERATED)/docs/man/* '$(INSTALL_DIR)'/man/
 	$(QUIET)$(MAKE) -C druntime install INSTALL_DIR='$(INSTALL_DIR)'
+	mkdir -p '$(INSTALL_DIR)'/linux/lib64
+	cp libdpatch.a libdpatch.so '$(INSTALL_DIR)'/linux/lib64/
+	if [ -f '$(INSTALL_DIR)'/linux/bin64/dmd.conf ]; then \
+		sed -i 's|-L-L%@P%/../lib64|-L-L%@P%/../lib64 -L-rpath=%@P%/../lib64|g' '$(INSTALL_DIR)'/linux/bin64/dmd.conf; \
+		sed -i 's|-L-L%@P%/../lib32|-L-L%@P%/../lib32 -L-rpath=%@P%/../lib32|g' '$(INSTALL_DIR)'/linux/bin64/dmd.conf; \
+	fi
 endif
 
 # Checks that all files have been committed and no temporary, untracked files exist.

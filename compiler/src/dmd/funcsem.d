@@ -541,6 +541,7 @@ void funcDeclarationSemantic(Scope* sc, FuncDeclaration funcdecl)
     funcdecl.userAttribDecl = sc.userAttribDecl;
     checkGNUABITag(funcdecl, funcdecl._linkage);
     checkMustUseReserved(funcdecl);
+    checkWatch(funcdecl, sc);
 
     if (!funcdecl.originalType)
         funcdecl.originalType = funcdecl.type.syntaxCopy();
@@ -4354,5 +4355,85 @@ bool nullDerefCheck(FuncDeclaration fd)
             return false;
         case CHECKENABLE._default:
             assert(0);
+    }
+}
+
+/******************************************
+ * Checks if a function has a @watch UDA.
+ * If so, sets isWatched = true and inlining = PINLINE.never.
+ */
+void checkWatch(FuncDeclaration fd, Scope* sc)
+{
+    import dmd.attrib : foreachUdaNoSemantic;
+    import dmd.id : Id;
+    import dmd.typesem : toDsymbol;
+
+    bool hasWatch = false;
+
+    foreachUdaNoSemantic(fd, (exp) {
+        // @("watch")
+        if (auto se = exp.isStringExp())
+        {
+            if (se.peekString() == "watch")
+            {
+                hasWatch = true;
+                return 1;
+            }
+        }
+        // @watch
+        if (auto ie = exp.isIdentifierExp())
+        {
+            if (ie.ident == Id.watch)
+            {
+                hasWatch = true;
+                return 1;
+            }
+        }
+        // Resolved types
+        if (auto te = exp.isTypeExp())
+        {
+            if (auto ts = te.type.toDsymbol(sc))
+            {
+                if (ts.ident == Id.watch)
+                {
+                    hasWatch = true;
+                    return 1;
+                }
+            }
+        }
+        // Resolved vars
+        if (auto ve = exp.isVarExp())
+        {
+            if (ve.var && ve.var.ident == Id.watch)
+            {
+                hasWatch = true;
+                return 1;
+            }
+        }
+        // Resolved dsymbols
+        if (auto dse = exp.isDsymbolExp())
+        {
+            if (dse.s && dse.s.ident == Id.watch)
+            {
+                hasWatch = true;
+                return 1;
+            }
+        }
+        // Resolved structs
+        if (auto sle = exp.isStructLiteralExp())
+        {
+            if (sle.sd && sle.sd.ident == Id.watch)
+            {
+                hasWatch = true;
+                return 1;
+            }
+        }
+        return 0;
+    });
+
+    if (hasWatch)
+    {
+        fd.isWatched = true;
+        fd.inlining = PINLINE.never;
     }
 }
