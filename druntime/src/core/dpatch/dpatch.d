@@ -370,6 +370,8 @@ private int dpatch_process_payload(int fd)
                     size_t stub_addr = cast(size_t)new_code + code_len + rodata_len + (stub_slot_idx * 32);
 
                     ubyte* stub_bytes = cast(ubyte*)stub_addr;
+                    // JMP [RIP+0]: FF 25 00 00 00 00. Loads the 8-byte target address from 
+                    // the memory location directly following this 6-byte JMP instruction.
                     stub_bytes[0] = 0xFF;
                     stub_bytes[1] = 0x25;
                     stub_bytes[2] = 0x00;
