@@ -44,7 +44,7 @@ extern(C) void* dpatch_tls_get_addr(void* ti)
         void* addr = dpatch_resolve_symbol(slot.sym_name);
         if (!addr)
         {
-            printf("[dpatch] TLS Error: Failed to resolve symbol %s\n", slot.sym_name);
+            if (g_verbose) printf("[dpatch] TLS Error: Failed to resolve symbol %s\n", slot.sym_name);
             return null;
         }
         void* tp = dpatch_get_tls_base();
@@ -55,6 +55,7 @@ extern(C) void* dpatch_tls_get_addr(void* ti)
     return cast(void*)(cast(long)tp + slot.offset);
 }
 
+__gshared bool g_verbose = false;
 __gshared int g_server_fd = -1;
 __gshared char[256] g_sock_path;
 
@@ -67,7 +68,7 @@ struct RelocHeader
 }
 
 // Call once at startup. Opens the Unix socket.
-int dpatch_init(const(char)* sock_path)
+int dpatch_init(bool verbose, const(char)* sock_path = null)
 {
     if (g_server_fd != -1)
         return 0; // Already initialized
@@ -114,7 +115,7 @@ int dpatch_init(const(char)* sock_path)
         return -3;
     }
 
-    printf("[dpatch] Listening for patches on %s\n", g_sock_path.ptr);
+    if (g_verbose) printf("[dpatch] Listening for patches on %s\n", g_sock_path.ptr);
     return 0;
 }
 
@@ -148,7 +149,7 @@ private bool read_all(int fd, void* buf, size_t size)
 // Processes one patch payload received over the client socket
 private int dpatch_process_payload(int fd)
 {
-    printf("[dpatch] Processing payload from daemon...\n");
+    if (g_verbose) printf("[dpatch] Processing payload from daemon...\n");
     // Read header: magic (4 bytes), version (2 bytes), num_functions (2 bytes)
     uint magic;
     ushort version_;
@@ -156,22 +157,22 @@ private int dpatch_process_payload(int fd)
 
     if (!read_all(fd, &magic, 4))
     {
-        printf("[dpatch] Failed to read magic header (errno=%d)\n", errno);
+        if (g_verbose) printf("[dpatch] Failed to read magic header (errno=%d)\n", errno);
         return -1;
     }
     if (magic != 0x44505443) // "DPTC"
     {
-        printf("[dpatch] Invalid magic: %08X\n", magic);
+        if (g_verbose) printf("[dpatch] Invalid magic: %08X\n", magic);
         return -2;
     }
 
     if (!read_all(fd, &version_, 2) || !read_all(fd, &num_functions, 2))
     {
-        printf("[dpatch] Failed to read version or function count (errno=%d)\n", errno);
+        if (g_verbose) printf("[dpatch] Failed to read version or function count (errno=%d)\n", errno);
         return -3;
     }
 
-    printf("[dpatch] Header: Magic=DPTC, Version=%d, Functions=%d\n", cast(int)version_, cast(int)num_functions);
+    if (g_verbose) printf("[dpatch] Header: Magic=DPTC, Version=%d, Functions=%d\n", cast(int)version_, cast(int)num_functions);
 
     int num_patched = 0;
 
@@ -203,7 +204,7 @@ private int dpatch_process_payload(int fd)
             return -6;
         }
 
-        printf("[dpatch] Function %d: Name=%s, CodeSize=%d bytes\n", f_idx, mangled_name, code_len);
+        if (g_verbose) printf("[dpatch] Function %d: Name=%s, CodeSize=%d bytes\n", f_idx, mangled_name, code_len);
 
         // Allocate temporary buffer for code
         ubyte* temp_code = cast(ubyte*)malloc(code_len);
@@ -270,7 +271,7 @@ private int dpatch_process_payload(int fd)
             return -12;
         }
 
-        printf("[dpatch] Relocations count: %d\n", cast(int)num_relocs);
+        if (g_verbose) printf("[dpatch] Relocations count: %d\n", cast(int)num_relocs);
 
         // Process and apply relocations
         int stub_slot_idx = 0;
@@ -348,7 +349,7 @@ private int dpatch_process_payload(int fd)
                 return -18;
             }
 
-            printf("[dpatch] Reloc %d: '%s' resolved to %p, type=%d, addend=%ld, offset=%u\n",
+            if (g_verbose) printf("[dpatch] Reloc %d: '%s' resolved to %p, type=%d, addend=%ld, offset=%u\n",
                    r_idx, sym_name, target_sym_addr, cast(int)type, addend, offset);
 
             bool free_sym = true;
@@ -358,7 +359,7 @@ private int dpatch_process_payload(int fd)
             if (type == 1) // R_X86_64_64 (abs64)
             {
                 *cast(ulong*)patch_ptr = cast(ulong)target_sym_addr + addend;
-                printf("[dpatch] Applied abs64: *%p = %lx\n", cast(void*)patch_ptr, *cast(ulong*)patch_ptr);
+                if (g_verbose) printf("[dpatch] Applied abs64: *%p = %lx\n", cast(void*)patch_ptr, *cast(ulong*)patch_ptr);
             }
             else if (type == 2) // R_X86_64_PC32/PLT32 (rel32)
             {
@@ -381,12 +382,12 @@ private int dpatch_process_payload(int fd)
 
                     target_offset = cast(long)stub_addr - 4 - cast(long)patch_ptr;
                     stub_slot_idx++;
-                    printf("[dpatch] Far reloc %d: generated PLT stub at %p -> jumping to %p\n",
+                    if (g_verbose) printf("[dpatch] Far reloc %d: generated PLT stub at %p -> jumping to %p\n",
                            r_idx, cast(void*)stub_addr, cast(void*)absolute_target);
                 }
 
                 *cast(uint*)patch_ptr = cast(uint)(target_offset & 0xFFFFFFFF);
-                printf("[dpatch] Applied rel32: *%p = %x (target_offset=%ld)\n", cast(void*)patch_ptr, *cast(uint*)patch_ptr, target_offset);
+                if (g_verbose) printf("[dpatch] Applied rel32: *%p = %x (target_offset=%ld)\n", cast(void*)patch_ptr, *cast(uint*)patch_ptr, target_offset);
             }
             else if (type == 3) // R_X86_64_GOTPCREL (gotpcrel32)
             {
@@ -397,7 +398,7 @@ private int dpatch_process_payload(int fd)
 
                 long target_offset = got_slot_addr - 4 - cast(long)patch_ptr;
                 *cast(uint*)patch_ptr = cast(uint)(target_offset & 0xFFFFFFFF);
-                printf("[dpatch] Applied gotpcrel32: *%p = %x (got_slot=%p -> target=%p)\n",
+                if (g_verbose) printf("[dpatch] Applied gotpcrel32: *%p = %x (got_slot=%p -> target=%p)\n",
                        cast(void*)patch_ptr, *cast(uint*)patch_ptr, cast(void*)got_slot_addr, cast(void*)(target_sym_addr + addend + 4));
             }
             else if (type == 4) // R_X86_64_TLSGD
@@ -414,7 +415,7 @@ private int dpatch_process_payload(int fd)
 
                 long target_offset = cast(long)slot_addr + addend - cast(long)patch_ptr;
                 *cast(uint*)patch_ptr = cast(uint)(target_offset & 0xFFFFFFFF);
-                printf("[dpatch] Applied tlsgd32: *%p = %x (tls_slot=%p for symbol='%s')\n",
+                if (g_verbose) printf("[dpatch] Applied tlsgd32: *%p = %x (tls_slot=%p for symbol='%s')\n",
                        cast(void*)patch_ptr, *cast(uint*)patch_ptr, cast(void*)slot_addr, sym_name);
             }
 
@@ -477,7 +478,7 @@ int dpatch_poll()
         return 0;
     }
 
-    printf("[dpatch] Connection accepted: fd=%d\n", client_fd);
+    if (g_verbose) printf("[dpatch] Connection accepted: fd=%d\n", client_fd);
 
     // Set a 1-second receive timeout on the client socket to prevent read_all from blocking forever
     timeval tv;
@@ -567,7 +568,7 @@ extern(C) pragma(crt_constructor) void dpatch_auto_init()
     import core.sys.posix.pthread : pthread_t, pthread_create, pthread_detach;
 
     // Auto-init socket
-    if (dpatch_init(null) != 0)
+    if (dpatch_init(false, null) != 0)
     {
         return;
     }
