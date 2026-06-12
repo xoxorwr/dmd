@@ -24,7 +24,17 @@ struct TlsSlot
     bool inited;
 }
 
-extern(C) void* pthread_self();
+private void* dpatch_get_tls_base()
+{
+    void* tp;
+    asm
+    {
+        xor RAX, RAX;
+        mov RAX, FS:[RAX];
+        mov tp, RAX;
+    }
+    return tp;
+}
 
 extern(C) void* dpatch_tls_get_addr(void* ti)
 {
@@ -34,14 +44,14 @@ extern(C) void* dpatch_tls_get_addr(void* ti)
         void* addr = dpatch_resolve_symbol(slot.sym_name);
         if (!addr)
         {
-            printf("[dpatch] TLS Error: Failed to resolve symbol %%s\n", slot.sym_name);
+            printf("[dpatch] TLS Error: Failed to resolve symbol %s\n", slot.sym_name);
             return null;
         }
-        void* tp = pthread_self();
+        void* tp = dpatch_get_tls_base();
         slot.offset = cast(long)addr - cast(long)tp;
         slot.inited = true;
     }
-    void* tp = pthread_self();
+    void* tp = dpatch_get_tls_base();
     return cast(void*)(cast(long)tp + slot.offset);
 }
 
@@ -219,7 +229,7 @@ private int dpatch_process_payload(int fd)
             printf("[dpatch] Failed to read rodata_len for %s (errno=%d)\n", mangled_name, errno);
             free(temp_code);
             free(mangled_name);
-            return -85;
+            return -9;
         }
 
         // Allocate contiguous mmap page for code + rodata + GOT/stubs
@@ -230,7 +240,7 @@ private int dpatch_process_payload(int fd)
             printf("[dpatch] Failed to allocate executable page for %s\n", mangled_name);
             free(temp_code);
             free(mangled_name);
-            return -86;
+            return -10;
         }
 
         // Copy code from temporary buffer to mmap page
@@ -246,7 +256,7 @@ private int dpatch_process_payload(int fd)
                 printf("[dpatch] Failed to read rodata bytes for %s (errno=%d)\n", mangled_name, errno);
                 dpatch_free_code_page(new_code, total_len);
                 free(mangled_name);
-                return -87;
+                return -11;
             }
         }
 
@@ -257,12 +267,14 @@ private int dpatch_process_payload(int fd)
             printf("[dpatch] Failed to read num_relocs for %s (errno=%d)\n", mangled_name, errno);
             dpatch_free_code_page(new_code, total_len);
             free(mangled_name);
-            return -9;
+            return -12;
         }
 
         printf("[dpatch] Relocations count: %d\n", cast(int)num_relocs);
 
         // Process and apply relocations
+        int stub_slot_idx = 0;
+        int got_slot_idx = 0;
         for (int r_idx = 0; r_idx < num_relocs; r_idx++)
         {
             uint offset;
@@ -275,21 +287,21 @@ private int dpatch_process_payload(int fd)
                 printf("[dpatch] Failed to read reloc offset %d for %s (errno=%d)\n", r_idx, mangled_name, errno);
                 dpatch_free_code_page(new_code, total_len);
                 free(mangled_name);
-                return -10;
+                return -13;
             }
             if (!read_all(fd, &type, 1))
             {
                 printf("[dpatch] Failed to read reloc type %d for %s (errno=%d)\n", r_idx, mangled_name, errno);
                 dpatch_free_code_page(new_code, total_len);
                 free(mangled_name);
-                return -10;
+                return -14;
             }
             if (!read_all(fd, &symbol_len, 2))
             {
                 printf("[dpatch] Failed to read reloc symbol_len %d for %s (errno=%d)\n", r_idx, mangled_name, errno);
                 dpatch_free_code_page(new_code, total_len);
                 free(mangled_name);
-                return -10;
+                return -15;
             }
 
             char* sym_name = cast(char*)malloc(symbol_len + 1);
@@ -299,7 +311,7 @@ private int dpatch_process_payload(int fd)
                 free(sym_name);
                 dpatch_free_code_page(new_code, total_len);
                 free(mangled_name);
-                return -11;
+                return -16;
             }
             sym_name[symbol_len] = '\0';
 
@@ -309,7 +321,7 @@ private int dpatch_process_payload(int fd)
                 free(sym_name);
                 dpatch_free_code_page(new_code, total_len);
                 free(mangled_name);
-                return -10;
+                return -17;
             }
 
             // Resolve target symbol address
@@ -333,7 +345,7 @@ private int dpatch_process_payload(int fd)
                 free(sym_name);
                 dpatch_free_code_page(new_code, total_len);
                 free(mangled_name);
-                return -12;
+                return -18;
             }
 
             printf("[dpatch] Reloc %d: '%s' resolved to %p, type=%d, addend=%ld, offset=%u\n",
@@ -354,7 +366,7 @@ private int dpatch_process_payload(int fd)
                 if (target_offset < -2147483648L || target_offset > 2147483647L)
                 {
                     // Target is too far (> 2GB)! Generate absolute JMP stub
-                    size_t stub_addr = cast(size_t)new_code + code_len + rodata_len + (r_idx * 32);
+                    size_t stub_addr = cast(size_t)new_code + code_len + rodata_len + (stub_slot_idx * 32);
 
                     ubyte* stub_bytes = cast(ubyte*)stub_addr;
                     stub_bytes[0] = 0xFF;
@@ -368,6 +380,7 @@ private int dpatch_process_payload(int fd)
                     *cast(ulong*)(stub_bytes + 6) = absolute_target;
 
                     target_offset = cast(long)stub_addr - 4 - cast(long)patch_ptr;
+                    stub_slot_idx++;
                     printf("[dpatch] Far reloc %d: generated PLT stub at %p -> jumping to %p\n",
                            r_idx, cast(void*)stub_addr, cast(void*)absolute_target);
                 }
@@ -378,8 +391,9 @@ private int dpatch_process_payload(int fd)
             else if (type == 3) // R_X86_64_GOTPCREL (gotpcrel32)
             {
                 // Allocate a GOT slot in the extra space of the code page
-                size_t got_slot_addr = cast(size_t)new_code + code_len + rodata_len + 4096 + (r_idx * 32);
+                size_t got_slot_addr = cast(size_t)new_code + code_len + rodata_len + 4096 + (got_slot_idx * 32);
                 *cast(ulong*)got_slot_addr = cast(ulong)target_sym_addr + addend + 4;
+                got_slot_idx++;
 
                 long target_offset = got_slot_addr - 4 - cast(long)patch_ptr;
                 *cast(uint*)patch_ptr = cast(uint)(target_offset & 0xFFFFFFFF);
@@ -389,7 +403,8 @@ private int dpatch_process_payload(int fd)
             else if (type == 4) // R_X86_64_TLSGD
             {
                 // Allocate a TlsSlot in the extra space of the code page
-                size_t slot_addr = cast(size_t)new_code + code_len + rodata_len + 4096 + (r_idx * 32);
+                size_t slot_addr = cast(size_t)new_code + code_len + rodata_len + 4096 + (got_slot_idx * 32);
+                got_slot_idx++;
                 auto tls_slot = cast(TlsSlot*)slot_addr;
                 tls_slot.sym_name = sym_name;
                 tls_slot.offset = 0;
@@ -415,7 +430,7 @@ private int dpatch_process_payload(int fd)
             printf("[dpatch] Failed to protect code page for %s\n", mangled_name);
             dpatch_free_code_page(new_code, total_len);
             free(mangled_name);
-            return -13;
+            return -19;
         }
 
         // Find the original function address
@@ -425,7 +440,7 @@ private int dpatch_process_payload(int fd)
             printf("[dpatch] Failed to resolve watched function: %s\n", mangled_name);
             dpatch_free_code_page(new_code, total_len);
             free(mangled_name);
-            return -14;
+            return -20;
         }
 
         // Apply JMP trampoline to original NOP prologue
@@ -435,7 +450,7 @@ private int dpatch_process_payload(int fd)
             printf("[dpatch] Failed to write trampoline for %s: err=%d\n", mangled_name, err);
             dpatch_free_code_page(new_code, total_len);
             free(mangled_name);
-            return -15;
+            return -21;
         }
 
         printf("[dpatch] Successfully patched function: %s (%p -> %p)\n", mangled_name, original_func, new_code);
@@ -549,7 +564,7 @@ private extern(C) void* dpatch_worker_thread(void* arg)
 // Auto-initialize using CRT constructor
 extern(C) pragma(crt_constructor) void dpatch_auto_init()
 {
-    import core.sys.posix.pthread : pthread_t, pthread_create;
+    import core.sys.posix.pthread : pthread_t, pthread_create, pthread_detach;
 
     // Auto-init socket
     if (dpatch_init(null) != 0)
@@ -559,7 +574,10 @@ extern(C) pragma(crt_constructor) void dpatch_auto_init()
 
     // Spawn thread to monitor for hotpatching events
     pthread_t thread;
-    pthread_create(&thread, null, &dpatch_worker_thread, null);
+    if (pthread_create(&thread, null, &dpatch_worker_thread, null) == 0)
+    {
+        pthread_detach(thread);
+    }
 }
 
 // Auto-cleanup using CRT destructor

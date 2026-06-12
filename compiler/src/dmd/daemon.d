@@ -551,8 +551,11 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
         return result;
 
     // Get section headers
+    if (ehdr.e_shoff + ehdr.e_shnum * Elf64_Shdr.sizeof > data.length) return result;
     auto shdrs = cast(Elf64_Shdr*)(data.ptr + ehdr.e_shoff);
+    if (ehdr.e_shstrndx >= ehdr.e_shnum) return result;
     auto shstr_shdr = &shdrs[ehdr.e_shstrndx];
+    if (shstr_shdr.sh_offset + shstr_shdr.sh_size > data.length) return result;
     auto shstrtab = cast(char*)(data.ptr + shstr_shdr.sh_offset);
 
     // Find symbol table (.symtab) and string table (.strtab)
@@ -563,12 +566,16 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
         if (shdrs[i].sh_type == SHT_SYMTAB)
         {
             symtab_shdr = &shdrs[i];
+            if (symtab_shdr.sh_link >= ehdr.e_shnum) return result;
             strtab_shdr = &shdrs[symtab_shdr.sh_link];
             break;
         }
     }
 
     if (!symtab_shdr || !strtab_shdr) return result;
+
+    if (symtab_shdr.sh_offset + symtab_shdr.sh_size > data.length) return result;
+    if (strtab_shdr.sh_offset + strtab_shdr.sh_size > data.length) return result;
 
     auto syms = cast(Elf64_Sym*)(data.ptr + symtab_shdr.sh_offset);
     size_t num_syms = cast(size_t)(symtab_shdr.sh_size / Elf64_Sym.sizeof);
@@ -579,6 +586,7 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
 
     for (int i = 0; i < ehdr.e_shnum; i++)
     {
+        if (shdrs[i].sh_name >= shstr_shdr.sh_size) continue;
         const(char)* secName = &shstrtab[shdrs[i].sh_name];
         if (strncmp(secName, ".rodata", 7) == 0)
         {
@@ -587,6 +595,7 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
             {
                 auto offset = cast(size_t)shdrs[i].sh_offset;
                 auto size = cast(size_t)shdrs[i].sh_size;
+                if (offset + size > data.length) continue;
                 auto secData = cast(ubyte[])data[offset .. offset + size];
                 auto oldLen = rodataBytes.length;
                 rodataBytes.length = oldLen + secData.length;
@@ -601,6 +610,7 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
         Elf64_Sym* func_sym = null;
         for (size_t i = 0; i < num_syms; i++)
         {
+            if (syms[i].st_name >= strtab_shdr.sh_size) continue;
             string symName = (&strtab[syms[i].st_name]).toDString().idup;
             if (symName == name)
             {
@@ -612,9 +622,16 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
         if (!func_sym || func_sym.st_shndx >= ehdr.e_shnum)
             continue;
 
-        // Get function section
+        // Get function code using symbol's offset and size within its section
         auto func_sec = &shdrs[func_sym.st_shndx];
-        ubyte[] code = cast(ubyte[])data[cast(size_t)func_sec.sh_offset .. cast(size_t)(func_sec.sh_offset + func_sec.sh_size)].dup;
+        auto func_offset_in_sec = cast(size_t)func_sym.st_value;
+        auto func_size = cast(size_t)func_sym.st_size;
+        if (func_size == 0)
+            func_size = cast(size_t)func_sec.sh_size; // fallback if st_size not set
+        auto func_file_offset = cast(size_t)func_sec.sh_offset + func_offset_in_sec;
+        if (func_file_offset + func_size > data.length)
+            continue;
+        ubyte[] code = cast(ubyte[])data[func_file_offset .. func_file_offset + func_size].dup;
 
         // Find relocation section for this section
         Elf64_Shdr* rela_sec = null;
@@ -630,15 +647,22 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
         Reloc[] relocs;
         if (rela_sec)
         {
+            if (rela_sec.sh_offset + rela_sec.sh_size > data.length) continue;
             auto relas = cast(Elf64_Rela*)(data.ptr + rela_sec.sh_offset);
             size_t num_relas = cast(size_t)(rela_sec.sh_size / Elf64_Rela.sizeof);
 
             for (size_t r = 0; r < num_relas; r++)
             {
+                // Skip relocations outside this function's range
+                if (relas[r].r_offset < func_offset_in_sec ||
+                    relas[r].r_offset >= func_offset_in_sec + func_size)
+                    continue;
                 auto rela = &relas[r];
                 ulong sym_idx = ELF64_R_SYM(rela.r_info);
                 ulong rel_type = ELF64_R_TYPE(rela.r_info);
 
+                if (sym_idx >= num_syms) continue;
+                if (syms[sym_idx].st_name >= strtab_shdr.sh_size) continue;
                 string sym_name = (&strtab[syms[sym_idx].st_name]).toDString().idup;
                 ushort shndx = syms[sym_idx].st_shndx;
                 long addend = rela.r_addend;
@@ -658,6 +682,7 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
                     {
                         if (shndx < ehdr.e_shnum)
                         {
+                            if (shdrs[shndx].sh_name >= shstr_shdr.sh_size) continue;
                             sym_name = (&shstrtab[shdrs[shndx].sh_name]).toDString().idup;
                         }
                     }
@@ -684,7 +709,9 @@ private Patch[] extractPatchesFromObj(string objFile, string[] watchedNames)
 
                 if (type != 0)
                 {
-                    relocs ~= Reloc(cast(uint)rela.r_offset, type, sym_name, addend);
+                    // Adjust offset to be relative to function start, not section start
+                    uint func_relative_offset = cast(uint)(rela.r_offset - func_offset_in_sec);
+                    relocs ~= Reloc(func_relative_offset, type, sym_name, addend);
                 }
             }
         }
@@ -837,6 +864,10 @@ private void dmd_send_patches(Patch[] patches)
                     printf("[daemon] Connect failed to %.*s\n", cast(int)sockPath.length, sockPath.ptr);
                 }
             }
+            else
+            {
+                printf("[daemon] Socket path too long: %.*s (max: %d bytes)\n", cast(int)sockPath.length, sockPath.ptr, cast(int)addr.sun_path.sizeof - 1);
+            }
             close(fd);
         }
     }
@@ -847,6 +878,6 @@ private void dmd_send_patches(Patch[] patches)
         printf("         Make sure your program is running with libdpatch.so initialized.\n");
         printf("         If using manual initialization, ensure dpatch_init() was called.\n");
         printf("         If using LD_PRELOAD, run your program with:\n");
-        printf("         LD_PRELOAD=/home/ryuukk/dev/dmd/libdpatch.so ./bin/game\n");
+        printf("         LD_PRELOAD=<path-to>/libdpatch.so ./<your-program>\n");
     }
 }

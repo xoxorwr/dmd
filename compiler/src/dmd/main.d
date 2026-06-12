@@ -272,9 +272,23 @@ private int tryMain(const(char)[][] argv, out Param params)
                     for (size_t idx = 1; idx < argv.length; idx++)
                     {
                         string s = argv[idx].idup;
-                        if (s == "-watch" || s == "--watch" || s == argsFilePath ||
-                            (endsWith(argsFilePath, s) && s.length > 0) ||
-                            (targetBinPath && (s == targetBinPath || endsWith(targetBinPath, s))))
+                        bool isArgFilePath = (s == argsFilePath);
+                        if (!isArgFilePath && s.length > 0 && endsWith(argsFilePath, s))
+                        {
+                            size_t prefixLen = argsFilePath.length - s.length;
+                            if (prefixLen > 0 && (argsFilePath[prefixLen - 1] == '/' || argsFilePath[prefixLen - 1] == '\\'))
+                                isArgFilePath = true;
+                        }
+
+                        bool isTargetBinPath = (targetBinPath && s == targetBinPath);
+                        if (targetBinPath && !isTargetBinPath && s.length > 0 && endsWith(targetBinPath, s))
+                        {
+                            size_t prefixLen = targetBinPath.length - s.length;
+                            if (prefixLen > 0 && (targetBinPath[prefixLen - 1] == '/' || targetBinPath[prefixLen - 1] == '\\'))
+                                isTargetBinPath = true;
+                        }
+
+                        if (s == "-watch" || s == "--watch" || isArgFilePath || isTargetBinPath)
                             continue;
                         argStrings ~= s;
                         newArgv ~= s;

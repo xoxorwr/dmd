@@ -93,9 +93,17 @@ void dpatch_uninstall_signal_handler()
     g_signal_handler_installed = false;
 }
 
-// Overwrite NOP prologue with jump instruction:
-// JMP [RIP+0] -> FF 25 00 00 00 00
-// Followed by 8-byte absolute address
+/**
+ * Overwrites the 14-byte NOP prologue of a function with an absolute JMP:
+ *   FF 25 00 00 00 00 <8-byte target address>
+ *
+ * Thread Safety:
+ *   - Uses a two-phase commit via an INT3 breakpoint (0xCC) to prevent
+ *     executing partially written instructions.
+ *   - Safe for single-threaded patching or when the target function is quiesced.
+ *   - Multi-core patching requires serializing instructions on target cores
+ *     to invalidate their instruction caches (I-cache).
+ */
 int dpatch_write_trampoline(void* original, void* target)
 {
     // Ensure signal handler is installed
@@ -104,13 +112,16 @@ int dpatch_write_trampoline(void* original, void* target)
         return -1;
     }
 
-    // Align to page boundary
+    // Align to page boundary, handle case where 14-byte write crosses a page
     size_t page_size = 4096; // Standard x86_64 page size
     size_t addr = cast(size_t)original;
     size_t page_start = addr & ~(page_size - 1);
+    size_t end_addr = addr + 13; // last byte of the 14-byte trampoline
+    size_t end_page = end_addr & ~(page_size - 1);
+    size_t mprotect_len = (end_page - page_start) + page_size;
 
-    // Make code page writable
-    if (mprotect(cast(void*)page_start, page_size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
+    // Make code page(s) writable
+    if (mprotect(cast(void*)page_start, mprotect_len, PROT_READ | PROT_WRITE | PROT_EXEC) != 0)
     {
         return -2;
     }
@@ -130,7 +141,7 @@ int dpatch_write_trampoline(void* original, void* target)
     {
         if (g_num_hooks >= g_hooks.length)
         {
-            mprotect(cast(void*)page_start, page_size, PROT_READ | PROT_EXEC);
+            mprotect(cast(void*)page_start, mprotect_len, PROT_READ | PROT_EXEC);
             return -3; // Too many hooks
         }
         hook_idx = g_num_hooks++;
@@ -169,7 +180,7 @@ int dpatch_write_trampoline(void* original, void* target)
     asm { mfence; }
 
     // Restore page permissions to Read-Execute
-    mprotect(cast(void*)page_start, page_size, PROT_READ | PROT_EXEC);
+    mprotect(cast(void*)page_start, mprotect_len, PROT_READ | PROT_EXEC);
 
     return 0;
 }

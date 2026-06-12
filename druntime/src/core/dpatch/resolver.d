@@ -109,6 +109,7 @@ extern(C) void* dpatch_resolve_symbol(const(char)* name)
         if (fread(shdrs.ptr, Elf64_Shdr.sizeof, ehdr.e_shnum, f) != ehdr.e_shnum) return null;
 
         // Read section header string table
+        if (ehdr.e_shstrndx >= ehdr.e_shnum) return null;
         Elf64_Shdr* shstr_shdr = &shdrs[ehdr.e_shstrndx];
         char[] shstrtab = (cast(char*)malloc(cast(size_t)shstr_shdr.sh_size))[0 .. cast(size_t)shstr_shdr.sh_size];
         if (!shstrtab.ptr) return null;
