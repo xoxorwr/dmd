@@ -779,6 +779,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                 if (token.value == TOK.identifier && skipParens(peek(&token), &tk) && skipAttributes(tk, &tk) &&
                     (tk.value == TOK.leftParenthesis || tk.value == TOK.leftCurly || tk.value == TOK.in_ ||
                      tk.value == TOK.out_ || tk.value == TOK.do_ || tk.value == TOK.goesTo ||
+                     tk.value == TOK.arrow ||
                      tk.value == TOK.identifier && tk.ident == Id._body))
                 {
                     if (tk.value == TOK.identifier && tk.ident == Id._body)
@@ -4356,7 +4357,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
      */
     private AST.Type parseDeclarator(AST.Type t, ref int palt, Identifier* pident,
         AST.TemplateParameters** tpl = null, STC storageClass = STC.none,
-        bool* pdisable = null, AST.Expressions** pudas = null)
+        bool* pdisable = null, AST.Expressions** pudas = null, bool* parrow = null)
     {
         //printf("parseDeclarator(tpl = %p)\n", tpl);
         t = parseTypeSuffixes(t);
@@ -4498,6 +4499,28 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                      */
                     // merge prefix storage classes
                     STC stc = parsePostfix(storageClass, pudas);
+
+                    // Handle -> return type syntax: foo() -> int, auto foo() -> int
+                    if (token.value == TOK.arrow)
+                    {
+                        if (t)
+                        {
+                            error("return type already specified before function name");
+                            nextToken(); // consume ->
+                            AST.Type arrowType = parseBasicType();
+                            arrowType = parseTypeSuffixes(arrowType);
+                            // keep the original prefix return type, ignore arrowType
+                        }
+                        else
+                        {
+                            nextToken(); // consume ->
+                            t = parseBasicType();
+                            t = parseTypeSuffixes(t);
+                            ts = t;
+                            if (parrow)
+                                *parrow = true;
+                        }
+                    }
 
                     AST.Type tf = new AST.TypeFunction(parameterList, t, linkage, stc);
                     tf = AST.addSTC(tf, stc);
@@ -4862,7 +4885,8 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                 if ((storage_class || udas) && token.value == TOK.identifier && skipParens(peek(&token), &tk) &&
                     skipAttributes(tk, &tk) &&
                     (tk.value == TOK.leftParenthesis || tk.value == TOK.leftCurly || tk.value == TOK.in_ || tk.value == TOK.out_ || tk.value == TOK.goesTo ||
-                     tk.value == TOK.do_ || tk.value == TOK.identifier && tk.ident == Id._body))
+                     tk.value == TOK.do_ || tk.value == TOK.arrow ||
+                     tk.value == TOK.identifier && tk.ident == Id._body))
                 {
                     if (tk.value == TOK.identifier && tk.ident == Id._body)
                         usageOfBodyKeyword();
@@ -4939,8 +4963,11 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
 
             const loc = token.loc;
             Identifier ident;
-            auto t = parseDeclarator(ts, alt, &ident, &tpl, storage_class, &disable, &udas);
+            bool arrowRet = false;
+            auto t = parseDeclarator(ts, alt, &ident, &tpl, storage_class, &disable, &udas, &arrowRet);
             assert(t);
+            if (arrowRet)
+                storage_class &= ~STC.auto_; // auto is a mere syntactic marker when -> is used
             if (!tfirst)
                 tfirst = t;
             else if (t != tfirst)
@@ -5339,12 +5366,12 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     token.value == TOK.delegate_ ||
                     token.value == TOK.leftParenthesis &&
                         skipAttributes(peekPastParen(&token), &tk) &&
-                        (tk.value == TOK.goesTo || tk.value == TOK.leftCurly) ||
+                        (tk.value == TOK.goesTo || tk.value == TOK.leftCurly || tk.value == TOK.arrow) ||
                     token.value == TOK.leftCurly ||
                     token.value == TOK.identifier && peekNext() == TOK.goesTo ||
                     token.value == TOK.ref_ && peekNext() == TOK.leftParenthesis &&
                         skipAttributes(peekPastParen(peek(&token)), &tk) &&
-                        (tk.value == TOK.goesTo || tk.value == TOK.leftCurly) ||
+                        (tk.value == TOK.goesTo || tk.value == TOK.leftCurly || tk.value == TOK.arrow) ||
                     token.value == TOK.auto_ &&
                         (peekNext() == TOK.leftParenthesis || // for better error
                             peekNext() == TOK.ref_ &&
@@ -5602,6 +5629,20 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     }
                     else
                         save = TOK.delegate_;
+                }
+                // Handle -> return type syntax: (params) -> int
+                if (token.value == TOK.arrow)
+                {
+                    if (tret)
+                    {
+                        error("return type already specified");
+                    }
+                    else
+                    {
+                        nextToken(); // consume ->
+                        tret = parseBasicType();
+                        tret = parseTypeSuffixes(tret);
+                    }
                 }
                 break;
             }
@@ -9005,7 +9046,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                 if (peekNext() == TOK.ref_ && peekNext2() == TOK.leftParenthesis)
                 {
                     Token* tk = peekPastParen(peek(peek(&token)));
-                    if (skipAttributes(tk, &tk) && (tk.value == TOK.goesTo || tk.value == TOK.leftCurly))
+                    if (skipAttributes(tk, &tk) && (tk.value == TOK.goesTo || tk.value == TOK.leftCurly || tk.value == TOK.arrow))
                     {
                         // auto ref (arguments) => expression
                         // auto ref (arguments) { statements... }
@@ -9021,7 +9062,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                 if (peekNext() == TOK.leftParenthesis)
                 {
                     Token* tk = peekPastParen(peek(&token));
-                    if (skipAttributes(tk, &tk) && (tk.value == TOK.goesTo || tk.value == TOK.leftCurly))
+                    if (skipAttributes(tk, &tk) && (tk.value == TOK.goesTo || tk.value == TOK.leftCurly || tk.value == TOK.arrow))
                     {
                         // ref (arguments) => expression
                         // ref (arguments) { statements... }
@@ -9035,7 +9076,7 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
         case TOK.leftParenthesis:
             {
                 Token* tk = peekPastParen(&token);
-                if (skipAttributes(tk, &tk) && (tk.value == TOK.goesTo || tk.value == TOK.leftCurly))
+                if (skipAttributes(tk, &tk) && (tk.value == TOK.goesTo || tk.value == TOK.leftCurly || tk.value == TOK.arrow))
                 {
                     // (arguments) => expression
                     // (arguments) { statements... }
