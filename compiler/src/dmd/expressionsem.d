@@ -12376,7 +12376,9 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
          */
         {
             Expression e2x = inferExpType(exp.e2, t1.baseElemOf());
+            sc.contextHint = (exp.e2.op == EXP.dotIdentifier) ? t1 : null;
             e2x = e2x.expressionSemantic(sc);
+            sc.contextHint = null;
             if (!t1.isTypeSArray())
                 e2x = e2x.arrayFuncConv(sc);
             e2x = resolveProperties(sc, e2x);
@@ -15874,7 +15876,16 @@ Expression binSemantic(BinExp e, Scope* sc)
         printf("BinExp::semantic('%s')\n", e.toErrMsg());
     }
     Expression e1x = e.e1.expressionSemantic(sc);
+
+    /* Context sensitive dot: communicate LHS type to `.ident` resolution.
+     * Only runs when RHS is a DotIdExp.
+     */
+    if (e.e2.op == EXP.dotIdentifier)
+        sc.contextHint = e1x.type;
+
     Expression e2x = e.e2.expressionSemantic(sc);
+
+	sc.contextHint = null;
 
     // for static alias this: https://issues.dlang.org/show_bug.cgi?id=17684
     if (e1x.op == EXP.type)
@@ -16163,6 +16174,27 @@ Expression dotIdSemanticProp(DotIdExp exp, Scope* sc, bool gag)
             if (p && checkAccess(sc, p))
             {
                 s = null;
+            }
+        }
+        /* Context sensitive dot: when module lookup fails for `.ident` expressions
+         * check if a context type was set by the parent expression.
+		 * If so, do an fast lookup in that type's members.
+         */
+        if (!s && sc.contextHint && ie.sds.isModule())
+        {
+            if (auto ds = sc.contextHint.toDsymbol(null))
+            {
+                if (auto sd = ds.isScopeDsymbol())
+                {
+                    if (sd.symtab)
+                    {
+                        if (auto member = sd.symtab.lookup(exp.ident))
+                        {
+                            if (auto enumMember = member.isEnumMember())
+                                s = enumMember;
+                        }
+                    }
+                }
             }
         }
         if (s)
