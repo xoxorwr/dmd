@@ -30,6 +30,7 @@ import dmd.func;
 import dmd.globals : FeatureState, Param;
 import dmd.identifier;
 import dmd.location : Loc;
+import dmd.mtype : Type;
 import dmd.root.rmem;
 import dmd.statement;
 
@@ -209,6 +210,7 @@ extern (C++) struct Scope
 
     AliasDeclaration aliasAsg; /// if set, then aliasAsg is being assigned a new value,
                                /// do not set wasRead for it
+    Type contextHint;          /// if set, `.ident` resolves against this type
     StructDeclaration argStruct;    /// elimiate recursion when looking for rvalue construction
 
     extern (D) __gshared Scope* freelist;
@@ -272,6 +274,7 @@ extern (C++) struct Scope
         s.ctfeBlock = this.ctfeBlock;
         s.previews = this.previews;
         s.lastdc = null;
+        s.contextHint = null;
         s.knownACompileTimeOnlyContext = this.knownACompileTimeOnlyContext;
         s.inIsDisabledTrait = this.inIsDisabledTrait;
         s.deferSemantic3InCompilerHook = this.deferSemantic3InCompilerHook;
