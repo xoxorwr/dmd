@@ -2190,6 +2190,19 @@ extern (C++) final class DotIdExp : UnaExp
     bool noderef;       // true if the result of the expression will never be dereferenced
     bool wantsym;       // do not replace Symbol with its initializer during semantic()
     bool arrow;         // ImportC: if -> instead of .
+    Type targetType;    // if set, `.ident` resolves against this type (context-sensitive member lookup)
+
+    extern (D) bool isLeadingDot() const
+    {
+        if (!e1)
+            return false;
+        if (e1.op == EXP.identifier)
+        {
+            auto ie = cast(const IdentifierExp)e1;
+            return ie.ident == Id.empty;
+        }
+        return false;
+    }
 
     extern (D) this(Loc loc, Expression e, Identifier ident) @safe
     {
