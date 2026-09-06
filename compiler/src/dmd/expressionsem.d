@@ -6316,6 +6316,19 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         if (e.sd.sizeok != Sizeok.done)
             return setError();
 
+        if (e.elements)
+        {
+            foreach (i, ref elem; *e.elements)
+            {
+                if (elem && i < e.sd.fields.length)
+                {
+                    if (auto field = e.sd.fields[i])
+                        if (field.type)
+                            elem = inferExpType(elem, field.type);
+                }
+            }
+        }
+
         // run semantic() on each element
         if (arrayExpressionSemantic(e.elements.peekSlice(), sc))
             return setError();
@@ -7982,6 +7995,42 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
             result = exp.e1;
             return;
         }
+
+        if (t1 && exp.arguments)
+        {
+            if (t1.ty == Tfunction)
+            {
+                TypeFunction tf = t1.isTypeFunction();
+                const paramCount = tf.parameterList.length;
+                foreach (i, ref arg; *exp.arguments)
+                {
+                    if (arg && i < paramCount && arg.op != EXP.function_)
+                    {
+                        if (auto p = tf.parameterList[i])
+                        {
+                            if (p.type)
+                                arg = inferExpType(arg, p.type);
+                        }
+                    }
+                }
+            }
+            else if (t1.ty == Tstruct)
+            {
+                auto sd = (cast(TypeStruct)t1).sym;
+                foreach (i, ref arg; *exp.arguments)
+                {
+                    if (arg && i < sd.fields.length && arg.op != EXP.function_)
+                    {
+                        if (auto field = sd.fields[i])
+                        {
+                            if (field.type)
+                                arg = inferExpType(arg, field.type);
+                        }
+                    }
+                }
+            }
+        }
+
         if (arrayExpressionSemantic(exp.arguments.peekSlice(), sc) ||
             preFunctionParameters(sc, exp.argumentList, global.errorSink))
             return setError();
@@ -12471,7 +12520,8 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
          * depends on the result of e1 in assignments.
          */
         {
-            Expression e2x = inferExpType(exp.e2, t1.baseElemOf());
+            Type elemType = t1.isTypeEnum() ? t1 : t1.baseElemOf();
+            Expression e2x = inferExpType(exp.e2, elemType);
             e2x = e2x.expressionSemantic(sc);
             if (!t1.isTypeSArray())
                 e2x = e2x.arrayFuncConv(sc);
@@ -15973,8 +16023,22 @@ Expression binSemantic(BinExp e, Scope* sc)
     {
         printf("BinExp::semantic('%s')\n", e.toErrMsg());
     }
-    Expression e1x = e.e1.expressionSemantic(sc);
-    Expression e2x = e.e2.expressionSemantic(sc);
+    Expression e1x;
+    Expression e2x;
+    if (e.e1.isDotIdExp() && e.e1.isDotIdExp().isLeadingDot())
+    {
+        e2x = e.e2.expressionSemantic(sc);
+        if (e2x.type)
+            e.e1 = inferExpType(e.e1, e2x.type);
+        e1x = e.e1.expressionSemantic(sc);
+    }
+    else
+    {
+        e1x = e.e1.expressionSemantic(sc);
+        if (e1x.type && e.e2.isDotIdExp() && e.e2.isDotIdExp().isLeadingDot())
+            e.e2 = inferExpType(e.e2, e1x.type);
+        e2x = e.e2.expressionSemantic(sc);
+    }
 
     // for static alias this: https://issues.dlang.org/show_bug.cgi?id=17684
     if (e1x.op == EXP.type)
@@ -16266,6 +16330,36 @@ Expression dotIdSemanticProp(DotIdExp exp, Scope* sc, bool gag)
             if (p && checkAccess(sc, p))
             {
                 s = null;
+            }
+        }
+        /* Context-sensitive dot: when module lookup fails for `.ident` expressions
+         * (leading dot syntax), check if targetType was set.
+         * If so, do an O(1) lookup in that type's members.
+         */
+        if (!s && exp.targetType && ie.sds.isModule())
+        {
+            Type tb = exp.targetType.toBasetype();
+            Dsymbol ds = null;
+            if (auto te = exp.targetType.isTypeEnum())
+                ds = te.sym;
+            else if (auto te = tb.isTypeEnum())
+                ds = te.sym;
+            else
+                ds = exp.targetType.toDsymbol(sc);
+
+            if (ds)
+            {
+                if (auto sd = ds.isScopeDsymbol())
+                {
+                    if (sd.symtab)
+                    {
+                        if (auto member = sd.symtab.lookup(exp.ident))
+                        {
+                            if (auto enumMember = member.isEnumMember())
+                                s = enumMember;
+                        }
+                    }
+                }
             }
         }
         if (s)
