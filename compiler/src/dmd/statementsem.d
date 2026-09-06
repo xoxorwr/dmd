@@ -2293,6 +2293,8 @@ Statement statementSemanticVisit(Statement s, Scope* sc)
         bool errors = false;
 
         //printf("CaseStatement::semantic() %s\n", toChars());
+        if (sw && sw.condition && sw.condition.type)
+            cs.exp = inferExpType(cs.exp, sw.condition.type);
         sc = sc.startCTFE();
         cs.exp = cs.exp.expressionSemantic(sc);
         cs.exp = resolveProperties(sc, cs.exp);
