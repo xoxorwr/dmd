@@ -1634,7 +1634,13 @@ Expression initializerToExpression(Initializer init, Scope* sc, Type itype, Erro
             foreach (ref e; *elements)
             {
                 if (!e.type)
+                {
+                    /* The element type is known here; propagate it before
+                     * semantic analysis so context-sensitive constructs such
+                     * as a leading-dot enum member (`.member`) can resolve. */
+                    e = inferExpType(e, telem);
                     e = e.expressionSemantic(sc);
+                }
                 if (e.op == EXP.error)
                     continue;
                 // prefer [a, b] => [[a, b], [a, b]] over [[a, a], [b, b]]
