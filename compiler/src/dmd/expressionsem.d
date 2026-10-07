@@ -7737,6 +7737,25 @@ private extern (C++) final class ExpressionSemanticVisitor : Visitor
         }
         scope(exit) --nest;
 
+        /* Context-sensitive aggregate literal `.{...}`: the callee is an empty
+         * identifier and the target type was inferred from context. Rewrite it to
+         * a regular type construction so the existing literal/ctor resolution runs.
+         */
+        if (exp.e1 && exp.e1.op == EXP.identifier)
+        {
+            auto ie = exp.e1.isIdentifierExp();
+            if (ie && ie.ident == Id.empty)
+            {
+                if (exp.targetType && exp.targetType.toBasetype().ty == Tstruct)
+                    exp.e1 = new TypeExp(exp.loc, exp.targetType);
+                else
+                {
+                    eSink.error(exp.loc, "cannot infer target type for `.{...}`");
+                    return setError();
+                }
+            }
+        }
+
         scope (exit)
         {
             if (TypeFunction tf = exp.f && exp.f.type ? exp.f.type.isTypeFunction() : null)

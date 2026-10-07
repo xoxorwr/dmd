@@ -9491,6 +9491,20 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
                     e = parseNewExp(e);
                     continue;
                 }
+                if (token.value == TOK.leftCurly && e.op == EXP.identifier)
+                {
+                    // Context-sensitive aggregate literal `.{...}`; the target
+                    // type is inferred from context, like the `.member` syntax.
+                    auto ie = e.isIdentifierExp();
+                    if (ie && ie.ident == Id.empty)
+                    {
+                        auto args = new AST.Expressions();
+                        auto names = new AST.ArgumentLabels();
+                        parseNamedArguments(args, names);
+                        e = new AST.CallExp(loc, e, args, names);
+                        continue;
+                    }
+                }
                 error("identifier or `new` expected following `.`, not `%s`", token.toChars());
                 break;
 
@@ -9952,7 +9966,9 @@ class Parser(AST, Lexer = dmd.lexer.Lexer) : Lexer
     {
         assert(arguments);
 
-        const endtok = token.value == TOK.leftBracket ? TOK.rightBracket : TOK.rightParenthesis;
+        const endtok = token.value == TOK.leftBracket ? TOK.rightBracket
+            : token.value == TOK.leftCurly ? TOK.rightCurly
+            : TOK.rightParenthesis;
 
         nextToken();
 

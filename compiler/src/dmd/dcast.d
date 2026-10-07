@@ -3350,6 +3350,13 @@ Expression inferExpType(Expression e, Type t)
                     die.targetType = t;
             }
             return e;
+        case EXP.call:
+            if (auto ce = e.isCallExp())
+            {
+                if (t && ce.isLeadingDotCall())
+                    ce.targetType = t;
+            }
+            return e;
         default:
     }
     return e;
