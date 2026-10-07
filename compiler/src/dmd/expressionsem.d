@@ -2455,9 +2455,12 @@ private Expression resolveUFCS(Scope* sc, CallExp ce)
         }
         else
         {
-            if (arrayExpressionSemantic(ce.arguments.peekSlice(), sc))
-                return ErrorExp.get();
-
+            /* Resolve the member/property before semanticizing the arguments.
+             * `dotIdSemanticProp` does not need them, and they must still be
+             * untyped here so that `CallExp` can infer context-sensitive
+             * leading-dot arguments (`.member`) from the resolved callee's
+             * parameter types.
+             */
             if (Expression ey = die.dotIdSemanticProp(sc, 1))
             {
                 if (ey.op == EXP.error)
@@ -2465,6 +2468,9 @@ private Expression resolveUFCS(Scope* sc, CallExp ce)
                 ce.e1 = ey;
                 if (isDotOpDispatch(ey))
                 {
+                    if (arrayExpressionSemantic(ce.arguments.peekSlice(), sc))
+                        return ErrorExp.get();
+
                     const errors = global.startGagging();
                     e = ce.expressionSemantic(sc);
                     if (!global.endGagging(errors))
@@ -2475,6 +2481,10 @@ private Expression resolveUFCS(Scope* sc, CallExp ce)
                 else
                     return null;
             }
+
+            // No member/property: arguments must be semanticized for the UFCS search
+            if (arrayExpressionSemantic(ce.arguments.peekSlice(), sc))
+                return ErrorExp.get();
         }
 
         /* https://issues.dlang.org/show_bug.cgi?id=13953

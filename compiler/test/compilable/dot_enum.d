@@ -13,6 +13,15 @@ struct Pixel
     int x;
 }
 
+struct Canvas
+{
+    Color bg;
+    void setBg(Color c) {}
+    void setTwo(Color a, Color b) {}
+    Color pick() { return .green; }
+    void withDefault(Color c = .blue) {}
+}
+
 Color makeColor() { return .green; }
 void takeColor(Color c) {}
 void takeTwo(Color a, Color b) {}
@@ -64,4 +73,16 @@ void main()
     // leading dot for module-scope anonymous enum members still works
     int top = .topLevelA;
     int top2 = .topLevelB;
+
+    // member function calls: leading-dot arguments are inferred from the
+    // resolved member's parameter types (the callee itself is a dot expression)
+    Canvas cv;
+    cv.setBg(.red);
+    cv.setTwo(.green, .blue);
+    cv.setTwo(.red, .blue);
+    cv.withDefault();
+    cv.withDefault(.red);
+
+    // context-sensitive leading dot in a member's return statement
+    cv.bg = cv.pick();
 }

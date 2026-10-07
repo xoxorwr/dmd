@@ -13,6 +13,14 @@ struct Pixel
     int x;
 }
 
+struct Canvas
+{
+    Color bg;
+    void setBg(Color c) { bg = c; }
+    Color pick() { return .green; }
+    Color withDefault(Color c = .blue) { return c; }
+}
+
 void takeColor(Color c)
 {
     assert(c == Color.red);
@@ -74,4 +82,20 @@ void main()
         case .blue: break;
         default: assert(false); break;
     }
+
+    // member function calls: the callee is itself a dot expression, so the
+    // leading-dot argument is inferred from the resolved member's parameters
+    Canvas cv;
+    cv.setBg(.red);
+    assert(cv.bg == Color.red);
+    cv.setBg(.green);
+    assert(cv.bg == Color.green);
+
+    // context-sensitive leading dot in a member's return statement
+    cv.bg = cv.pick();
+    assert(cv.bg == Color.green);
+
+    // default argument of a member function
+    assert(cv.withDefault() == Color.blue);
+    assert(cv.withDefault(.red) == Color.red);
 }
